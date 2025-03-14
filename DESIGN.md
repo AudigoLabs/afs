@@ -33,18 +33,25 @@ block before it can start writing to it, which can also be very slow.
 
 AFS splits the available storage into blocks which are intended to align with the underlying allocation unit of the
 storage device (typically 4MB). All blocks must be the same size, and this size should never change for a given device.
+Blocks can be a maximum of 256MB in size (limited by the seek chunk as described below).
 
 Each block is assigned to a single object. One of the downsides of this approach is that this means that storage space
-is consumed in 4MB chunks, so objects always consume at least 4MB of storage space. AFS keeps an in-memory lookup table
-containing information on what is stored in each block. Because each block is so large, this lookup table can be kept
-relatively small, even for very large SD cards. For example, a 32GB SD card requires a lookup table of just 32KB.
+is consumed in 4MB chunks (assuming a 4MB block size), so objects always consume at least 4MB of storage space. AFS
+keeps an in-memory lookup table containing information on what is stored in each block. Because each block is so large,
+this lookup table can be kept relatively small, even for very large SD cards. For example, a 32GB SD card requires a
+lookup table of just 32KB assuming a 4MB block size.
+
+As of version 2 of AFS, blocks are then divided further into sub-blocks. The number of sub-blocks per block is
+configurable, but, similarly to the block size, should never change for a given device. The block size must also be
+evenly divisible by the number of sub-blocks. Sub-blocks are used to more efficiently seek within a block as the start
+of every sub-block starts with a seek chunk (more info below).
 
 ### Object ID
 
 Each object is assigned a unique ID. The ID should be considered a random (non-zero) 16-bit value, but is guaranteed to
 be locally unique across every object currently stored within the file system. Note that these IDs may be reused over
-time as objects are deleted and others are created, and this does put a 2^16-1 limit on the number objects which can be
-stored within the file system at any given time.
+time as objects are deleted and others are created, and this does put a 2^16-1 limit on the number of objects which can
+be stored within the file system at any given time.
 
 ### Streams
 
@@ -57,9 +64,17 @@ we allow for up to 16 streams of data to be stored as part of a single object.
 ### Block Header
 
 Every block starts with a block header which has the following fields:
-* Magic (4 bytes) - Always the 4 characters "AFS1"
+* Magic (4 bytes) - Always the 4 characters `AFS2` (or `AFS1` for legacy version 1 blocks)
 * Object ID (2 bytes) - The ID of the object stored in this block
 * Object Block Index (2 bytes) The index of this block within the object
+
+### Block Footer
+
+Every block ends with a block footer which starts 128 bytes from the end of the block. The block footer consists of the
+following:
+* Magic (4 bytes) - Always the 4 characters `afs2`
+* Seek Chunk (<= 68 bytes) - A final seek chunk for the end of the block
+* The remaining space is filled with zeros
 
 ### Chunk Header
 
@@ -81,9 +96,20 @@ An offset chunk is used to allow for faster seeking within an object. It is the 
 except for the first one, and is followed by an 8-byte value for each stream within the object which indicates the total
 amount of data written to that stream so far in the object.
 
+#### Seek Chunk (Type 0x5e)
+
+A seek chunk allows for efficiently seeking within a block. A seek chunk is placed at the beginning of every sub-block
+which contains object data except for the first one. There is also a final seek chunk contained within the block footer
+at the end of the block. Each seek chunk contains the current amount of data written up to that point in the block for
+each stream. This is stored in the form of a 4-byte value for each stream. Each of these values contains 4 bits for the
+stream index plus 28 bits for the amount of data written to that stream so far within the current block. This is also
+where the 256MB limit on block sizes comes into play. The length of the chunk is used to determine how many stream
+offsets are present.
+
 #### End Chunk (Type 0xed)
 
-An end chunk marks the end of an object. It has no data following it, and is always the last valid chunk in a block.
+An end chunk marks the end of an object. It has no data following it, and is always the last valid chunk in a block
+(other than the footer).
 
 #### Invalid Chunk (Type 0xff and 0x00)
 
@@ -118,11 +144,11 @@ block is 1234. The first step is to write the block header to the start of the b
 
 ```
            BLOCK 0 (4MB)
-.---------------------------------.
-|             "AFS1"              |
-|----------------+----------------|
-|      1234      |       0        |
-|----------------+----------------|
+.---------------------------------.    -
+|             "AFS1"              |    |
+|----------------+----------------|    | Block Header (object_id=1234, object_block_index=0)
+|      1234      |       0        |    |
+|----------------+----------------|    -
 |                                 |
 |                                 |
 '---------------------------------.
@@ -180,7 +206,6 @@ Notice that our object_block_index field is now set to 1, indicating that this i
 Next, let's say we are done writing to this object, so we close it. At this point, we write an end chunk to indicate
 that we've reached the end of the object:
 
-
 ```
            BLOCK 3 (4MB)
 .---------------------------------.    -
@@ -213,7 +238,11 @@ buffer and returning it. When we reach the end of block 0, we again check our lo
 containing an object_id of 1234 and an object_block_index of 1, which is block 3, and we continue iterating over the
 chunks in block 3.
 
+### Object Seeking
+
 If we want to seek to a specific point in the object which has many blocks, we first need to determine which block
 contains the portion of the object which we're looking for. This is done by performing a binary search and reading the
-offset chunk from the start of each block (other than the first one, which has an offset of 0). Then, we iterate through
-the chunks of the block we want to find the position of the data we're looking for.
+offset chunk from the start of each block (other than the first one, which has an offset of 0). Once we identify the
+block, we then perform a binary search of the sub-blocks to locate the one which contains the portion of the object
+we're looking for. Lastly, or in the case of an AFS version 1 block which doesn't have sub-blocks, we linearly iterate
+through the chunks to find the position of the data we're looking for.
