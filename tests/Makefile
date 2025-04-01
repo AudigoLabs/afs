@@ -10,9 +10,15 @@ CXX := g++
 C_SOURCES := \
 	$(AFS_ROOT)/src/afs.c \
 	$(AFS_ROOT)/src/afs_debug.c \
-	$(AFS_ROOT)/src/afs_cache.c \
-	$(AFS_ROOT)/src/afs_storage.c \
-	$(AFS_ROOT)/src/afs_util.c
+	$(AFS_ROOT)/src/cache.c \
+	$(AFS_ROOT)/src/compile_checks.c \
+	$(AFS_ROOT)/src/lookup_table.c \
+	$(AFS_ROOT)/src/object_read.c \
+	$(AFS_ROOT)/src/object_seek.c \
+	$(AFS_ROOT)/src/object_write.c \
+	$(AFS_ROOT)/src/open_object_list.c \
+	$(AFS_ROOT)/src/storage.c \
+	$(AFS_ROOT)/src/util.c
 
 INCLUDE_DIRS := \
 	$(PROJECT_DIR) \

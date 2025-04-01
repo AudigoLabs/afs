@@ -24,52 +24,55 @@ _Static_assert(sizeof(afs_stream_bitmask_t) * 8 == AFS_NUM_STREAMS, "Invalid bit
     static afs_object_handle_def_t _##NAME##_def; \
     static const afs_object_handle_t NAME = &_##NAME##_def
 
+//! Calculates the required size of the lookup table buffer
+#define AFS_LOOKUP_TABLE_SIZE(NUM_BLOCKS) \
+    ((sizeof(uint32_t) * (NUM_BLOCKS)) + ((NUM_BLOCKS) + 7) / 8)
+
 //! Type used to define an AFS object handle - should be created with AFS_OBJECT_HANDLE_DEF()
 typedef struct __attribute__((aligned(sizeof(uintptr_t)))) {
     // Private memory used by AFS internally
-    uint8_t priv[sizeof(uintptr_t) == 8 ? 88 : 56];
+    uint8_t priv[sizeof(uintptr_t) == 8 ? 120 : 76];
 } afs_handle_def_t;
 
 //! Type used to define an AFS object handle - should be created with AFS_OBJECT_HANDLE_DEF()
 typedef struct __attribute__((aligned(sizeof(uintptr_t)))) {
     // Private memory used by AFS internally
-    uint8_t priv[sizeof(uintptr_t) == 8 ? 192 : 184];
+    uint8_t priv[sizeof(uintptr_t) == 8 ? 264 : 248];
 } afs_object_handle_def_t;
 
-//! Type which represents an entry in the lookup table used for properly statically allocating space
-typedef uint32_t afs_lookup_table_entry_t;
+//! Function type for the object found mount callback
+typedef void (*afs_object_found_callback_t)(uint16_t object_id, uint8_t stream, const uint8_t* data, uint32_t data_length);
 
-//! Function type for reading the underlying storage
-typedef void (*afs_read_func_t)(uint8_t* buf, uint16_t block, uint32_t offset, uint32_t length);
-
-//! Function type for writing to the underlying storage
-typedef void (*afs_write_func_t)(const uint8_t* buf, uint16_t block, uint32_t offset, uint32_t length);
-
-//! Function type for erasing the underlying storage
-typedef void (*afs_erase_func_t)(uint16_t block);
-
-//! AFS initialization type
+//! Type to encapsulate the storage interface and configuration.
 typedef struct {
-    // The size of a block (should match the AU size of the SD card - typically 4MB)
+    // The size of a block (should match the AU size of the storage - typically 4MB)
     uint32_t block_size;
     // The total number of blocks
     uint16_t num_blocks;
-    // The minimum read/write size (should match the block size of the SD card - typically 512 bytes)
-    uint32_t read_write_size;
-    // A buffer of size read_write_size used internally by AFS
-    uint8_t* read_write_buffer;
-    // Buffer for the lookup table used internally (must have space for `num_blocks` entries)
-    afs_lookup_table_entry_t* lookup_table;
+    // The number of sub-blocks per block (block_size must be evenly divisible by this value - typically 256)
+    uint32_t sub_blocks_per_block;
+    // The minimum read/write size (should match the block size of the storage - typically 512 bytes)
+    uint32_t min_read_write_size;
     // Function used to read data from the underlying storage device
-    afs_read_func_t read_func;
+    void (*read)(uint8_t* buf, uint16_t block, uint32_t offset, uint32_t length);
     // Function used to write data to the underlying storage device
-    afs_write_func_t write_func;
+    void (*write)(const uint8_t* buf, uint16_t block, uint32_t offset, uint32_t length);
     // Function used to erase a block on the underlying storage device
-    afs_erase_func_t erase_func;
+    void (*erase)(uint16_t block);
+} afs_storage_config_t;
+
+//! AFS initialization type
+typedef struct {
+    // Storage configuration
+    afs_storage_config_t storage_config;
+    // A buffer of size `storage.min_read_write_size` used internally by AFS
+    uint8_t* read_write_buffer;
+    // Buffer for the lookup table used internally (use `AFS_LOOKUP_TABLE_SIZE()` to determine the required size)
+    void* lookup_table_buffer;
     // Optional callbacks used during mounting of the file system
     struct {
         // A handler to call as objects are found
-        void (*object_found)(uint16_t object_id, uint8_t stream, const uint8_t* data, uint32_t data_length);
+        afs_object_found_callback_t object_found;
     } mount_callbacks;
 } afs_init_t;
 
@@ -77,14 +80,14 @@ typedef struct {
 typedef struct {
     // Memory buffer allocated for the object
     uint8_t* buffer;
-    // Size of the memory buffer
+    // Size of the memory buffer (must either be a multiple of the sub-block size or vice-versa)
     uint32_t buffer_size;
 } afs_object_config_t;
 
 //! Read position used by afs_object_save_read_position() and afs_object_restore_read_position()
 typedef struct __attribute__((aligned(sizeof(uintptr_t)))) {
     // Private memory used by AFS internally
-    uint8_t priv[sizeof(uintptr_t) == 8 ? 144 : 144];
+    uint8_t priv[208];
 } afs_read_position_t;
 
 //! Iterator context used by afs_object_list()
