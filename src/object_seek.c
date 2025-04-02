@@ -54,7 +54,7 @@ static uint16_t search_block_index(afs_impl_t* afs, afs_obj_impl_t* obj, uint64_
     uint64_t density = estimate_update_density(util_get_stream_offset(obj->object_offset, obj->read.stream), obj->read.storage_offset);
 
     // Find an index which is above the target offset (ideally as close as possible)
-    uint16_t index = MIN_VAL(estimate_calculate_index(density, target_offset, block_size) + 1, max_index);
+    uint16_t index = CLAMP_VAL(estimate_calculate_index(density, target_offset, block_size) + 1, current_index, max_index);
     bool prev_check_was_prev_index = false;
     offset_chunk_data_t offset_data;
     while (true) {
@@ -132,7 +132,7 @@ static uint16_t search_sub_block_index(afs_impl_t* afs, afs_obj_impl_t* obj, uin
     const uint64_t density = estimate_update_density(util_get_stream_offset(obj->object_offset, obj->read.stream), obj->read.storage_offset);
 
     // Find an index which is above the target offset (ideally as close as possible)
-    uint16_t index = MIN_VAL(estimate_calculate_index(density, target_offset, sub_block_size) + 1, max_index);
+    uint16_t index = CLAMP_VAL(estimate_calculate_index(density, target_offset, sub_block_size) + 1, current_index, max_index);
     bool prev_check_was_prev_index = false;
     seek_chunk_data_t seek_data;
     while (true) {
@@ -183,7 +183,7 @@ static uint16_t search_sub_block_index(afs_impl_t* afs, afs_obj_impl_t* obj, uin
 uint64_t object_seek_to_block(afs_impl_t* afs, afs_obj_impl_t* obj, uint64_t offset) {
     const uint64_t prev_stream_offset = util_get_stream_offset(obj->object_offset, obj->read.stream);
     const uint64_t target_stream_offset = prev_stream_offset + offset;
-    uint64_t new_stream_offsets[AFS_NUM_STREAMS];
+    uint64_t new_stream_offsets[AFS_NUM_STREAMS] = {};
     const uint16_t new_index = search_block_index(afs, obj, target_stream_offset, new_stream_offsets);
     if (new_index == SEARCH_RESULT_NO_CHANGE) {
         return offset;
@@ -210,7 +210,7 @@ uint64_t object_seek_to_sub_block(afs_impl_t* afs, afs_obj_impl_t* obj, uint64_t
 
     const uint64_t prev_block_offset = util_get_block_offset(obj->block_offset, obj->read.stream);
     const uint64_t target_block_offset = prev_block_offset + offset;
-    uint32_t new_block_offsets[AFS_NUM_STREAMS];
+    uint32_t new_block_offsets[AFS_NUM_STREAMS] = {};
     const uint16_t new_index = search_sub_block_index(afs, obj, target_block_offset, new_block_offsets);
     if (new_index == SEARCH_RESULT_NO_CHANGE) {
         return offset;

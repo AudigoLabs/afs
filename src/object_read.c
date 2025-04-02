@@ -7,6 +7,8 @@
 
 #include <string.h>
 
+static const uint32_t MIN_CHUNK_SIZE = sizeof(chunk_header_t) + 1;
+
 static void process_block_header(position_t* position, afs_obj_impl_t* obj) {
     // Read the block header
     block_header_t header;
@@ -107,29 +109,24 @@ static bool process_new_chunk(afs_obj_impl_t* obj, position_t* position, uint32_
 static void align_storage_offset(const afs_impl_t* afs, afs_obj_impl_t* obj, const position_t* position) {
     const uint32_t block_size = obj->storage.config->block_size;
     const uint32_t block_offset = obj->read.storage_offset % block_size;
-    AFS_ASSERT(block_offset <= block_size);
-    if (lookup_table_get_is_v2(&afs->lookup_table, position->block)) {
-        if (block_size - BLOCK_FOOTER_LENGTH - block_offset < sizeof(chunk_header_t) + 1) {
-            // No more chunks or data in this block, so move to the next block
-            AFS_LOG_DEBUG("No more chunks in current block");
-            obj->read.storage_offset = ALIGN_UP(obj->read.storage_offset, block_size);
-            memset(obj->block_offset, 0, sizeof(obj->block_offset));
-        } else {
-            const uint32_t sub_block_size = block_size / obj->storage.config->sub_blocks_per_block;
-            const uint32_t sub_block_offset = block_offset % sub_block_size;
-            if (sub_block_size - sub_block_offset < sizeof(chunk_header_t) + 1) {
-                // No more chunks or data in this sub-block, so align up to the next sub-block
-                AFS_LOG_DEBUG("No more chunks in current sub-block");
-                obj->read.storage_offset = ALIGN_UP(obj->read.storage_offset, sub_block_size);
-                memset(obj->block_offset, 0, sizeof(obj->block_offset));
-            }
-        }
-    } else {
-        if (block_size - block_offset < sizeof(chunk_header_t) + 1) {
-            // No more chunks or data in this block, so move to the next block
-            AFS_LOG_DEBUG("No more chunks in current block");
-            obj->read.storage_offset = ALIGN_UP(obj->read.storage_offset, block_size);
-            memset(obj->block_offset, 0, sizeof(obj->block_offset));
+    const bool is_v2 = lookup_table_get_is_v2(&afs->lookup_table, position->block);
+
+    const uint32_t end_offset = block_size - (is_v2 ? BLOCK_FOOTER_LENGTH : 0);
+    AFS_ASSERT(block_offset <= end_offset);
+    if (end_offset - block_offset < MIN_CHUNK_SIZE) {
+        // No more chunks or data in this block, so move to the next block
+        AFS_LOG_DEBUG("No more chunks in current block");
+        obj->read.storage_offset = ALIGN_UP(obj->read.storage_offset, block_size);
+        memset(obj->block_offset, 0, sizeof(obj->block_offset));
+    }
+
+    if (is_v2) {
+        const uint32_t sub_block_size = block_size / obj->storage.config->sub_blocks_per_block;
+        const uint32_t sub_block_offset = block_offset % sub_block_size;
+        if (sub_block_size - sub_block_offset < MIN_CHUNK_SIZE) {
+            // No more chunks or data in this sub-block, so align up to the next sub-block
+            AFS_LOG_DEBUG("No more chunks in current sub-block");
+            obj->read.storage_offset = ALIGN_UP(obj->read.storage_offset, sub_block_size);
         }
     }
 }
