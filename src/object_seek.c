@@ -15,6 +15,10 @@
 #define DEFAULT_DENSITY                 980000
 #define MIN_DENSITY                     1000
 
+static inline uint16_t current_block_index(afs_obj_impl_t* obj) {
+    return obj->read.storage_offset / obj->storage.config->block_size;
+}
+
 static inline uint64_t estimate_update_density(uint64_t data_offset, uint64_t storage_offset) {
     if (data_offset < MIN_DATA_OFFSET_FOR_DENSITY) {
         // Not enough data to accurately calculate the density, so just assume the default
@@ -44,7 +48,7 @@ static uint64_t get_block_stream_offset(afs_impl_t* afs, afs_obj_impl_t* obj, ui
 
 static uint16_t search_block_index(afs_impl_t* afs, afs_obj_impl_t* obj, uint64_t target_offset, uint64_t* new_stream_offsets) {
     const uint32_t block_size = obj->storage.config->block_size;
-    const uint16_t current_index = obj->read.storage_offset / block_size;
+    const uint16_t current_index = current_block_index(obj);
     const uint16_t max_index = lookup_table_get_num_blocks(&afs->lookup_table, obj->object_id) - 1;
     if (current_index == max_index) {
         // Can't go any higher, so assume we're already at the right index
@@ -70,8 +74,8 @@ static uint16_t search_block_index(afs_impl_t* afs, afs_obj_impl_t* obj, uint64_
         // Need to go higher
         memcpy(new_stream_offsets, offset_data.offsets, sizeof(offset_data.offsets));
         if (index == max_index) {
-            // Can't go higher, so just bail
-            return SEARCH_RESULT_NO_CHANGE;
+            // Can't go higher, so use the max index
+            return index == current_index ? SEARCH_RESULT_NO_CHANGE : index;
         }
         density = estimate_update_density(util_get_stream_offset(offset_data.offsets, obj->read.stream), (uint64_t)index * block_size);
         const uint16_t new_estimate = estimate_calculate_index(density, target_offset, block_size) + 1;
@@ -86,7 +90,7 @@ static uint16_t search_block_index(afs_impl_t* afs, afs_obj_impl_t* obj, uint64_
 
     if (index == current_index) {
         // Can't go lower - should never happen
-        AFS_LOG_ERROR("Failed to find sub-block index (%u)", current_index);
+        AFS_LOG_ERROR("Failed to find block index (%u)", current_index);
         return SEARCH_RESULT_NO_CHANGE;
     }
 
@@ -111,7 +115,7 @@ static uint16_t search_block_index(afs_impl_t* afs, afs_obj_impl_t* obj, uint64_
 
 static uint64_t get_sub_block_offset(afs_impl_t* afs, afs_obj_impl_t* obj, uint16_t index, seek_chunk_data_t* data) {
     memset(data, 0, sizeof(*data));
-    const uint16_t block_index = obj->read.storage_offset / obj->storage.config->block_size;
+    const uint16_t block_index = current_block_index(obj);
     const uint16_t block = lookup_table_get_block(&afs->lookup_table, obj->object_id, block_index);
     if (!storage_read_seek_data(&afs->storage, block, index, data)) {
         // There must not be any data in this sub-block since the seek chunk wasn't written - return the max offset
@@ -200,7 +204,7 @@ uint64_t object_seek_to_block(afs_impl_t* afs, afs_obj_impl_t* obj, uint64_t off
 }
 
 uint64_t object_seek_to_sub_block(afs_impl_t* afs, afs_obj_impl_t* obj, uint64_t offset) {
-    const uint16_t block_index = obj->read.storage_offset / obj->storage.config->block_size;
+    const uint16_t block_index = current_block_index(obj);
     const uint16_t block = lookup_table_get_block(&afs->lookup_table, obj->object_id, block_index);
     AFS_ASSERT_NOT_EQ(block, INVALID_BLOCK);
     if (!lookup_table_get_is_v2(&afs->lookup_table, block)) {
