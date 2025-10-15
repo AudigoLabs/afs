@@ -47,6 +47,7 @@ static bool chunk_iter_next(afs_impl_t* afs, chunk_iter_context_t* context) {
     switch (type) {
         case CHUNK_TYPE_DATA_FIRST ... CHUNK_TYPE_DATA_LAST:
         case CHUNK_TYPE_OFFSET:
+        case CHUNK_TYPE_SEEK:
             storage_read_data(&afs->storage, &position, context->data, MIN_VAL(data_length, sizeof(context->data)));
             return true;
         case CHUNK_TYPE_END:
@@ -97,6 +98,32 @@ static void populate_offset_chunk_data_string(char* str, const chunk_iter_contex
     }
 }
 
+static void populate_seek_chunk_data_string(char* str, const chunk_iter_context_t* chunk_iter) {
+    memset(str, 0, DATA_BUFFER_SIZE);
+    const uint32_t data_length = CHUNK_TAG_GET_LENGTH(chunk_iter->header.tag);
+    const uint32_t num_offsets = MIN_VAL(data_length, sizeof(chunk_iter->data)) / sizeof(uint32_t);
+    int offset = 0;
+    if (data_length % sizeof(uint32_t)) {
+        const int res = snprintf(&str[offset], DATA_BUFFER_SIZE - offset, "<invalid length (%"PRIu32")>", data_length);
+        AFS_ASSERT(res > 0 && res < DATA_BUFFER_SIZE - offset);
+        offset += res;
+        return;
+    }
+    // Write out the offset pairs
+    const uint32_t* offsets = (const uint32_t*)chunk_iter->data;
+    for (uint32_t i = 0; i < num_offsets; i++) {
+        const uint32_t offset_value = SEEK_OFFSET_DATA_GET_OFFSET(offsets[i]);
+        const int res = snprintf(&str[offset], DATA_BUFFER_SIZE - offset, "{0x%x,0x%08"PRIx32"}", SEEK_OFFSET_DATA_GET_STREAM(offsets[i]), offset_value);
+        AFS_ASSERT(res > 0 && res < DATA_BUFFER_SIZE - offset);
+        offset += res;
+        if (i < num_offsets - 1) {
+            AFS_ASSERT(offset < DATA_BUFFER_SIZE);
+            strcpy(&str[offset], ",");
+            offset++;
+        }
+    }
+}
+
 static bool chunk_iter_callback(afs_impl_t* afs, const chunk_iter_context_t* chunk_iter) {
     char data_str[DATA_BUFFER_SIZE];
     const uint8_t type = CHUNK_TAG_GET_TYPE(chunk_iter->header.tag);
@@ -111,6 +138,10 @@ static bool chunk_iter_callback(afs_impl_t* afs, const chunk_iter_context_t* chu
         case CHUNK_TYPE_OFFSET:
             populate_offset_chunk_data_string(data_str, chunk_iter);
             AFS_LOG_INFO("  [0x%06"PRIx32"]=Offset(num=%u, data=%s)", chunk_iter->offset, (uint8_t)(CHUNK_TAG_GET_LENGTH(chunk_iter->header.tag) / sizeof(uint64_t)), data_str);
+            break;
+        case CHUNK_TYPE_SEEK:
+            populate_seek_chunk_data_string(data_str, chunk_iter);
+            AFS_LOG_INFO("  [0x%06"PRIx32"]=Seek(num=%u, data=%s)", chunk_iter->offset, (uint8_t)(CHUNK_TAG_GET_LENGTH(chunk_iter->header.tag) / sizeof(uint32_t)), data_str);
             break;
         case CHUNK_TYPE_INVALID_ZERO:
         case CHUNK_TYPE_INVALID_ONE:
