@@ -28,11 +28,16 @@ static inline void set_free(lookup_table_t* lookup_table, uint16_t block, uint16
 }
 
 static inline void set_is_v2(lookup_table_t* lookup_table, uint16_t block, bool value) {
-    lookup_table->version_bitmap[block / sizeof(uint8_t)] |= (value ? 1 : 0) << (block & 0x7);
+    const uint8_t mask = 1 << (block & 0x7);
+    if (value) {
+        lookup_table->version_bitmap[block / 8] |= mask;
+    } else {
+        lookup_table->version_bitmap[block / 8] &= ~mask;
+    }
 }
 
 static inline bool get_is_v2(const lookup_table_t* lookup_table, uint16_t block) {
-    return lookup_table->version_bitmap[block / sizeof(uint8_t)] & (1 << (block & 0x07));
+    return lookup_table->version_bitmap[block / 8] & (1 << (block & 0x07));
 }
 
 static uint32_t get_object_data_from_cache(cache_t* cache, uint8_t* stream) {

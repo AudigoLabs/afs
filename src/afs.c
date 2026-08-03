@@ -150,6 +150,12 @@ bool afs_object_open(afs_handle_t afs_handle, afs_object_handle_t object_handle,
         },
     };
     open_object_list_add(afs, obj);
+
+    if (stream != AFS_WILDCARD_STREAM) {
+        // Skip ahead to the first block and sub-block containing data for this stream
+        object_seek_to_block(afs, obj, 0);
+        object_seek_to_sub_block(afs, obj, 0);
+    }
     return true;
 }
 

@@ -1,3 +1,4 @@
 build/
+build_asan/
 .DS_Store
 .vscode/

@@ -20,9 +20,13 @@ static bool read_seek_chunk(storage_t* storage, position_t* position, seek_chunk
     storage_read_chunk_header(storage, position, &seek_chunk_header);
 
     // Validate the seek chunk data length
+    const uint8_t seek_chunk_type = CHUNK_TAG_GET_TYPE(seek_chunk_header.tag);
     const uint32_t seek_chunk_data_length = CHUNK_TAG_GET_LENGTH(seek_chunk_header.tag);
     const uint32_t seek_chunk_num_entries = seek_chunk_data_length / sizeof(uint32_t);
-    if (CHUNK_TAG_GET_TYPE(seek_chunk_header.tag) != CHUNK_TYPE_SEEK) {
+    if (seek_chunk_type == CHUNK_TYPE_INVALID_ZERO || seek_chunk_type == CHUNK_TYPE_INVALID_ONE) {
+        // This region hasn't been written yet, so there's no seek chunk to read
+        return false;
+    } else if (seek_chunk_type != CHUNK_TYPE_SEEK) {
         AFS_LOG_ERROR("Invalid seek chunk (0x%"PRIx32")", seek_chunk_header.tag);
         return false;
     } else if (seek_chunk_data_length > storage->config->block_size - position->offset) {
