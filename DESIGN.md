@@ -238,11 +238,19 @@ buffer and returning it. When we reach the end of block 0, we again check our lo
 containing an object_id of 1234 and an object_block_index of 1, which is block 3, and we continue iterating over the
 chunks in block 3.
 
+When an object is opened for reading a specific (non-wildcard) stream, the read position is first advanced to the
+first block and sub-block containing data for that stream using the same offset / seek chunk search used for seeking.
+This means that reading a stream whose data starts deep within the object (for example, a small stream written once
+right before the object was closed) doesn't require scanning over all the chunks of the other streams before it.
+
 ### Object Seeking
 
 If we want to seek to a specific point in the object which has many blocks, we first need to determine which block
-contains the portion of the object which we're looking for. This is done by performing a binary search and reading the
-offset chunk from the start of each block (other than the first one, which has an offset of 0). Once we identify the
-block, we then perform a binary search of the sub-blocks to locate the one which contains the portion of the object
-we're looking for. Lastly, or in the case of an AFS version 1 block which doesn't have sub-blocks, we linearly iterate
-through the chunks to find the position of the data we're looking for.
+contains the portion of the object which we're looking for. This is done by reading the offset chunks from the start
+of blocks (other than the first one, which has an offset of 0), starting from an index estimated from the density of
+the stream's data so far and then galloping away from it with doubling steps until the target is bracketed, finishing
+with a binary search. This keeps the number of offset chunks read logarithmic even when the density estimate is way
+off (i.e. for a stream with very little data in the object). Once we identify the block, we then perform the same
+style of search over the sub-blocks using their seek chunks to locate the one which contains the portion of the
+object we're looking for. Lastly, or in the case of an AFS version 1 block which doesn't have sub-blocks, we linearly
+iterate through the chunks to find the position of the data we're looking for.

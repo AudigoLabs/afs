@@ -131,6 +131,10 @@ void test_storage_get_afs_init(afs_init_t* init);
 
 void test_storage_generate_v1_block(uint16_t block, uint16_t object_id, const void* data, uint32_t data_length);
 
+void test_storage_reset_read_stats(void);
+
+void test_storage_get_read_stats(uint64_t* num_calls, uint64_t* num_bytes);
+
 void assert_storage_expectations_start(void);
 
 void assert_storage_expectations_end(void);

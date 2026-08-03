@@ -35,9 +35,9 @@ MAKEFLAGS += -r
 CURR_MAKEFILE := $(firstword $(MAKEFILE_LIST))
 OBJS := $(addprefix $(BUILD_DIR)/,$(notdir $(C_SOURCES:%=%.o))) $(addprefix $(BUILD_DIR)/,$(notdir $(CXX_SOURCES:%=%.o)))
 
-CFLAGS := $(addprefix -I,$(INCLUDE_DIRS)) -g3 -Og -Werror $(addprefix -D,$(C_DEFINES))
+CFLAGS := $(addprefix -I,$(INCLUDE_DIRS)) -g3 -Og -Werror $(addprefix -D,$(C_DEFINES)) $(EXTRA_FLAGS)
 CPP_FLAGS :=
-LDFLAGS := -lgtest -lpthread
+LDFLAGS := -lgtest -lpthread $(EXTRA_FLAGS)
 
 ifeq ($(OS),Windows_NT)
 $(error "Windows is not currently supported")
@@ -46,7 +46,13 @@ UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
 # Likely using clang
 CFLAGS += -Wno-extern-c-compat
-CPP_FLAGS += -std=c++14
+CPP_FLAGS += -std=c++17 -Wno-c99-designator
+# Pick up googletest from Homebrew if available
+BREW_PREFIX := $(shell brew --prefix 2>/dev/null)
+ifneq ($(BREW_PREFIX),)
+CFLAGS += -I$(BREW_PREFIX)/include
+LDFLAGS += -L$(BREW_PREFIX)/lib
+endif
 else
 CPP_FLAGS += -D_Static_assert=static_assert
 endif
@@ -62,9 +68,13 @@ run: $(BUILD_DIR)/$(PROJECT_NAME)
 
 build: $(BUILD_DIR)/$(PROJECT_NAME)
 
+# Build and run the tests with AddressSanitizer enabled (in a separate build directory)
+asan:
+	@$(MAKE) run BUILD_DIR=build_asan EXTRA_FLAGS="-fsanitize=address -fno-omit-frame-pointer"
+
 clean:
 	@echo "Deleting $(BUILD_DIR)"
-	@rm -rf $(BUILD_DIR)
+	@rm -rf $(BUILD_DIR) build_asan
 
 $(BUILD_DIR)/:
 	@echo "Creating $(BUILD_DIR)"
@@ -82,5 +92,5 @@ $(BUILD_DIR)/$(PROJECT_NAME): $(OBJS) $(LINKER_SCRIPT)
 	@echo "Linking $(notdir $@)"
 	@$(CXX) $(OBJS) -o $@ $(LDFLAGS)
 
-.PHONY: build clean
+.PHONY: build asan clean
 .DEFAULT_GOAL := run

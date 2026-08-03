@@ -597,6 +597,149 @@ TEST_F(AFSFixture, SmallDataAtEndOfBlock) {
   ASSERT_TRUE(afs_object_close(afs_, obj));
 }
 
+// Verify that reading a stream whose only data is at the very end of a large object doesn't scan the whole object
+TEST_F(AFSFixture, TailStreamRead) {
+  AFS_OBJECT_HANDLE_DEF(obj);
+  static uint8_t buffer[16*1024];
+  const afs_object_config_t config = {
+    .buffer = buffer,
+    .buffer_size = sizeof(buffer),
+  };
+  uint8_t write_data[1024*1024];
+  randomize_write_data(write_data, sizeof(write_data));
+  uint8_t manifest[50];
+  for (size_t i = 0; i < sizeof(manifest); i++) {
+    manifest[i] = (uint8_t)(i * 7 + 13);
+  }
+
+  // Write a large amount of data to stream 0 followed by a tiny amount of data to stream 5 right before closing
+  const uint16_t object_id = afs_object_create(afs_, obj, &config);
+  uint64_t total_written = 0;
+  for (int i = 0; i < 143; i++) {
+    ASSERT_TRUE(afs_object_write(afs_, obj, 0, write_data, sizeof(write_data)));
+    total_written += sizeof(write_data);
+  }
+  ASSERT_TRUE(afs_object_write(afs_, obj, 5, manifest, sizeof(manifest)));
+  ASSERT_TRUE(afs_object_close(afs_, obj));
+  // Spanning 34+ blocks also exercises the version bitmap for high block numbers under `make asan`
+  ASSERT_GE(afs_object_get_num_blocks(afs_, object_id), 34);
+
+  // Open and read back the tail stream while counting the storage reads
+  test_storage_reset_read_stats();
+  ASSERT_TRUE(afs_object_open(afs_, obj, 5, object_id, &config));
+  uint8_t read_data[sizeof(manifest)];
+  ASSERT_EQ(afs_object_read(afs_, obj, read_data, sizeof(read_data), NULL), sizeof(read_data));
+  ASSERT_DATA_MATCHES(read_data, manifest, sizeof(manifest));
+
+  // Make sure there's no more data to read
+  ASSERT_EQ(afs_object_read(afs_, obj, read_data, sizeof(read_data), NULL), 0);
+
+  // Reading the tail stream should require far less I/O than reading the whole object
+  uint64_t num_calls, num_bytes;
+  test_storage_get_read_stats(&num_calls, &num_bytes);
+  ASSERT_LT(num_bytes, 512 * 1024);
+  ASSERT_LT(num_bytes, total_written / 100);
+
+  // The size should also be cheap to get (via the footer of the last block)
+  test_storage_reset_read_stats();
+  ASSERT_EQ(afs_object_size(afs_, obj, 0), sizeof(manifest));
+  test_storage_get_read_stats(&num_calls, &num_bytes);
+  ASSERT_LT(num_bytes, 4 * 1024);
+
+  // Close the object
+  ASSERT_TRUE(afs_object_close(afs_, obj));
+}
+
+// Verify that reading a stream which has no data in an object is cheap and returns no data
+TEST_F(AFSFixture, EmptyStreamRead) {
+  AFS_OBJECT_HANDLE_DEF(obj);
+  static uint8_t buffer[16*1024];
+  const afs_object_config_t config = {
+    .buffer = buffer,
+    .buffer_size = sizeof(buffer),
+  };
+  uint8_t write_data[1024*1024];
+  randomize_write_data(write_data, sizeof(write_data));
+
+  // Create the object with data written only to stream 0
+  const uint16_t object_id = afs_object_create(afs_, obj, &config);
+  for (int i = 0; i < 6; i++) {
+    ASSERT_TRUE(afs_object_write(afs_, obj, 0, write_data, sizeof(write_data)));
+  }
+  ASSERT_TRUE(afs_object_close(afs_, obj));
+
+  // Open a stream which was never written to and make sure it reads back empty without scanning the object
+  test_storage_reset_read_stats();
+  ASSERT_TRUE(afs_object_open(afs_, obj, 7, object_id, &config));
+  ASSERT_EQ(afs_object_size(afs_, obj, 0), 0);
+  uint8_t read_data[16];
+  ASSERT_EQ(afs_object_read(afs_, obj, read_data, sizeof(read_data), NULL), 0);
+  uint64_t num_calls, num_bytes;
+  test_storage_get_read_stats(&num_calls, &num_bytes);
+  ASSERT_LT(num_bytes, 128 * 1024);
+
+  // Close the object
+  ASSERT_TRUE(afs_object_close(afs_, obj));
+}
+
+// Verify reading and seeking within a sparse stream whose data is written at a few points deep within the object
+TEST_F(AFSFixture, SparseStreamReadAndSeek) {
+  AFS_OBJECT_HANDLE_DEF(obj);
+  static uint8_t buffer[16*1024];
+  const afs_object_config_t config = {
+    .buffer = buffer,
+    .buffer_size = sizeof(buffer),
+  };
+  uint8_t write_data[1024*1024];
+  randomize_write_data(write_data, sizeof(write_data));
+  uint8_t sparse_data[3000];
+  for (size_t i = 0; i < sizeof(sparse_data); i++) {
+    sparse_data[i] = (uint8_t)(i * 31 + 7);
+  }
+
+  // Create the object with two small regions of stream 3 data buried between large regions of stream 0 data
+  const uint16_t object_id = afs_object_create(afs_, obj, &config);
+  for (int i = 0; i < 12; i++) {
+    ASSERT_TRUE(afs_object_write(afs_, obj, 0, write_data, sizeof(write_data)));
+  }
+  ASSERT_TRUE(afs_object_write(afs_, obj, 3, sparse_data, 2000));
+  for (int i = 0; i < 12; i++) {
+    ASSERT_TRUE(afs_object_write(afs_, obj, 0, write_data, sizeof(write_data)));
+  }
+  ASSERT_TRUE(afs_object_write(afs_, obj, 3, sparse_data + 2000, 1000));
+  ASSERT_TRUE(afs_object_close(afs_, obj));
+
+  // Read back the whole sparse stream (across the gap between its two regions)
+  ASSERT_TRUE(afs_object_open(afs_, obj, 3, object_id, &config));
+  ASSERT_EQ(afs_object_size(afs_, obj, 0), sizeof(sparse_data));
+  uint8_t read_data[sizeof(sparse_data)];
+  uint32_t total_read = 0;
+  while (total_read < sizeof(sparse_data)) {
+    const uint32_t read_length = afs_object_read(afs_, obj, read_data + total_read, sizeof(read_data) - total_read, NULL);
+    ASSERT_GT(read_length, 0u);
+    total_read += read_length;
+  }
+  ASSERT_EQ(total_read, sizeof(sparse_data));
+  ASSERT_DATA_MATCHES(read_data, sparse_data, sizeof(sparse_data));
+  ASSERT_EQ(afs_object_read(afs_, obj, read_data, sizeof(read_data), NULL), 0);
+  ASSERT_TRUE(afs_object_close(afs_, obj));
+
+  // Seek partway into the sparse stream and read the rest of it
+  ASSERT_TRUE(afs_object_open(afs_, obj, 3, object_id, &config));
+  ASSERT_TRUE(afs_object_seek(afs_, obj, 1500));
+  memset(read_data, 0, sizeof(read_data));
+  total_read = 0;
+  while (total_read < sizeof(sparse_data) - 1500) {
+    const uint32_t read_length = afs_object_read(afs_, obj, read_data + total_read, sizeof(read_data) - total_read, NULL);
+    ASSERT_GT(read_length, 0u);
+    total_read += read_length;
+  }
+  ASSERT_EQ(total_read, sizeof(sparse_data) - 1500);
+  ASSERT_DATA_MATCHES(read_data, sparse_data + 1500, sizeof(sparse_data) - 1500);
+  ASSERT_EQ(afs_object_read(afs_, obj, read_data, sizeof(read_data), NULL), 0);
+  ASSERT_TRUE(afs_object_close(afs_, obj));
+}
+
 // Verify insecure wipe deletes all the objects
 TEST_F(AFSFixture, InsecureWipe) {
   AFS_OBJECT_HANDLE_DEF(obj);

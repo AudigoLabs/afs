@@ -1,7 +1,6 @@
 #include "object_seek.h"
 
 #include "afs_config.h"
-#include "binary_search.h"
 #include "lookup_table.h"
 #include "storage.h"
 #include "util.h"
@@ -55,62 +54,38 @@ static uint16_t search_block_index(afs_impl_t* afs, afs_obj_impl_t* obj, uint64_
         return SEARCH_RESULT_NO_CHANGE;
     }
 
-    uint64_t density = estimate_update_density(util_get_stream_offset(obj->object_offset, obj->read.stream), obj->read.storage_offset);
+    // Find the highest index whose starting stream offset is at or below the target offset
+    uint32_t low = current_index;
+    uint32_t high = (uint32_t)max_index + 1;
 
-    // Find an index which is above the target offset (ideally as close as possible)
-    uint16_t index = CLAMP_VAL(estimate_calculate_index(density, target_offset, block_size) + 1, current_index, max_index);
-    bool prev_check_was_prev_index = false;
+    // Probe at the density-estimated index, gallop outward until the target is bracketed, then binary search
+    const uint64_t density = estimate_update_density(util_get_stream_offset(obj->object_offset, obj->read.stream), obj->read.storage_offset);
+    uint32_t probe = CLAMP_VAL((uint32_t)estimate_calculate_index(density, target_offset, block_size) + 1, low + 1, high - 1);
+    uint32_t step = 1;
     offset_chunk_data_t offset_data;
-    while (true) {
-        if (get_block_stream_offset(afs, obj, index, &offset_data) > target_offset) {
-            // Found the index we're after for this loop
-            if (prev_check_was_prev_index) {
-                // We previously checked the previous index and it was lower, so that was the target index
-                index--;
-                return index == current_index ? SEARCH_RESULT_NO_CHANGE : index;
-            }
-            break;
+    while (high - low > 1) {
+        const bool is_above = get_block_stream_offset(afs, obj, probe, &offset_data) > target_offset;
+        if (is_above) {
+            high = probe;
+        } else {
+            low = probe;
+            memcpy(new_stream_offsets, offset_data.offsets, sizeof(offset_data.offsets));
         }
-        // Need to go higher
-        memcpy(new_stream_offsets, offset_data.offsets, sizeof(offset_data.offsets));
-        if (index == max_index) {
-            // Can't go higher, so use the max index
-            return index == current_index ? SEARCH_RESULT_NO_CHANGE : index;
-        }
-        density = estimate_update_density(util_get_stream_offset(offset_data.offsets, obj->read.stream), (uint64_t)index * block_size);
-        const uint16_t new_estimate = estimate_calculate_index(density, target_offset, block_size) + 1;
-        index++;
-        prev_check_was_prev_index = true;
-        if (new_estimate <= max_index && new_estimate > index) {
-            // Jump ahead to the new estimate instead
-            index = new_estimate;
-            prev_check_was_prev_index = false;
+        if (low != current_index && high != (uint32_t)max_index + 1) {
+            // Both bounds have been probed, so the target is bracketed - binary search the remaining range
+            probe = low + (high - low) / 2;
+        } else if (is_above) {
+            // Still galloping down towards the target
+            probe = probe > low + step ? probe - step : low + 1;
+            step *= 2;
+        } else {
+            // Still galloping up towards the target
+            probe = MIN_VAL(probe + step, high - 1);
+            step *= 2;
         }
     }
 
-    if (index == current_index) {
-        // Can't go lower - should never happen
-        AFS_LOG_ERROR("Failed to find block index (%u)", current_index);
-        return SEARCH_RESULT_NO_CHANGE;
-    }
-
-    // Linearly loop down towards the current index
-    while (--index > current_index) {
-        if (get_block_stream_offset(afs, obj, index, &offset_data) > target_offset) {
-            // Still need to go lower
-            continue;
-        }
-        // Found the index which contains the target offset
-        break;
-    }
-
-    if (index == current_index) {
-        // Already on this index
-        return SEARCH_RESULT_NO_CHANGE;
-    }
-
-    memcpy(new_stream_offsets, offset_data.offsets, sizeof(offset_data.offsets));
-    return index;
+    return low == current_index ? SEARCH_RESULT_NO_CHANGE : (uint16_t)low;
 }
 
 static uint64_t get_sub_block_offset(afs_impl_t* afs, afs_obj_impl_t* obj, uint16_t index, seek_chunk_data_t* data) {
@@ -128,60 +103,44 @@ static uint16_t search_sub_block_index(afs_impl_t* afs, afs_obj_impl_t* obj, uin
     const uint32_t sub_block_size = obj->storage.config->block_size / obj->storage.config->sub_blocks_per_block;
     const uint16_t current_index = (obj->read.storage_offset % obj->storage.config->block_size) / sub_block_size;
     const uint16_t max_index = obj->storage.config->sub_blocks_per_block - 1;
-    if (current_index == max_index) {
-        // Can't go any higher, so assume we're already at the right index
+    if (current_index + 1 >= max_index) {
+        // There are no sub-blocks to search between the current one and the last one
         return SEARCH_RESULT_NO_CHANGE;
     }
 
+    // Find the highest index whose starting stream offset is at or below the target offset
+    uint32_t low = current_index;
+    // The last sub-block is excluded since its seek chunk (within the footer) holds the end-of-block offsets
+    uint32_t high = max_index;
+
+    // Probe at the density-estimated index, gallop outward until the target is bracketed, then binary search
     const uint64_t density = estimate_update_density(util_get_stream_offset(obj->object_offset, obj->read.stream), obj->read.storage_offset);
-
-    // Find an index which is above the target offset (ideally as close as possible)
-    uint16_t index = CLAMP_VAL(estimate_calculate_index(density, target_offset, sub_block_size) + 1, current_index, max_index);
-    bool prev_check_was_prev_index = false;
+    uint32_t probe = CLAMP_VAL((uint32_t)estimate_calculate_index(density, target_offset, sub_block_size) + 1, low + 1, high - 1);
+    uint32_t step = 1;
     seek_chunk_data_t seek_data;
-    while (true) {
-        if (get_sub_block_offset(afs, obj, index, &seek_data) > target_offset) {
-            // Found the index we're after for this loop
-            if (prev_check_was_prev_index) {
-                // We previously checked the previous index and it was lower, so that was the target index
-                index--;
-                return index == current_index ? SEARCH_RESULT_NO_CHANGE : index;
-            }
-            break;
+    while (high - low > 1) {
+        const bool is_above = get_sub_block_offset(afs, obj, probe, &seek_data) > target_offset;
+        if (is_above) {
+            high = probe;
+        } else {
+            low = probe;
+            memcpy(new_block_offsets, seek_data.offsets, sizeof(seek_data.offsets));
         }
-        // Need to go higher
-        memcpy(new_block_offsets, seek_data.offsets, sizeof(seek_data.offsets));
-        if (index == max_index) {
-            // Can't go higher, so just bail
-            return SEARCH_RESULT_NO_CHANGE;
+        if (low != current_index && high != max_index) {
+            // Both bounds have been probed, so the target is bracketed - binary search the remaining range
+            probe = low + (high - low) / 2;
+        } else if (is_above) {
+            // Still galloping down towards the target
+            probe = probe > low + step ? probe - step : low + 1;
+            step *= 2;
+        } else {
+            // Still galloping up towards the target
+            probe = MIN_VAL(probe + step, high - 1);
+            step *= 2;
         }
-        index++;
-        prev_check_was_prev_index = true;
     }
 
-    if (index == current_index) {
-        // Can't go lower - should never happen
-        AFS_LOG_ERROR("Failed to find sub-block index (%u)", current_index);
-        return SEARCH_RESULT_NO_CHANGE;
-    }
-
-    // Linearly loop down towards the current index
-    while (--index > current_index) {
-        if (get_sub_block_offset(afs, obj, index, &seek_data) > target_offset) {
-            // Still need to go lower
-            continue;
-        }
-        // Found the index which contains the target offset
-        break;
-    }
-
-    if (index == current_index) {
-        // Already on this index
-        return SEARCH_RESULT_NO_CHANGE;
-    }
-
-    memcpy(new_block_offsets, seek_data.offsets, sizeof(seek_data.offsets));
-    return index;
+    return low == current_index ? SEARCH_RESULT_NO_CHANGE : (uint16_t)low;
 }
 
 uint64_t object_seek_to_block(afs_impl_t* afs, afs_obj_impl_t* obj, uint64_t offset) {

@@ -61,12 +61,16 @@ bool operator==(const HexValue64& lhs, const HexValue64& rhs) {
 
 static uint8_t* m_storage;
 static uint32_t m_exp_offset;
+static uint64_t m_read_calls;
+static uint64_t m_read_bytes;
 
 static void read_func(uint8_t* buf, uint16_t block, uint32_t offset, uint32_t length) {
   ASSERT_TRUE(block < NUM_BLOCKS);
   ASSERT_TRUE((uint64_t)length + (uint64_t)offset <= BLOCK_SIZE);
   ASSERT_EQ(offset % READ_WRITE_SIZE, 0);
   ASSERT_EQ(length % READ_WRITE_SIZE, 0);
+  m_read_calls++;
+  m_read_bytes += length;
   memcpy(buf, &m_storage[(uint64_t)block * BLOCK_SIZE + offset], length);
 #if ENABLE_IO_PRINTS
   if (block == 0) {
@@ -104,6 +108,17 @@ void test_storage_init(void) {
   m_storage = (uint8_t*)malloc(STORAGE_SIZE);
   ASSERT_TRUE(m_storage != NULL);
   memset(m_storage, 0, STORAGE_SIZE);
+  test_storage_reset_read_stats();
+}
+
+void test_storage_reset_read_stats(void) {
+  m_read_calls = 0;
+  m_read_bytes = 0;
+}
+
+void test_storage_get_read_stats(uint64_t* num_calls, uint64_t* num_bytes) {
+  *num_calls = m_read_calls;
+  *num_bytes = m_read_bytes;
 }
 
 void test_storage_deinit(void) {
