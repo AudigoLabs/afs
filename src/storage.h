@@ -34,3 +34,5 @@ void storage_write_cache(storage_t* storage, bool pad);
 
 //! Erases a block of storage
 void storage_erase(storage_t* storage, uint16_t block);
+
+void storage_wipe_block_header(storage_t* storage, uint16_t block);

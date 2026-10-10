@@ -141,6 +141,7 @@ void lookup_table_populate(afs_impl_t* afs, afs_object_found_callback_t object_f
         if (!is_object_deleted(&afs->lookup_table, object_id)) {
             AFS_LOG_DEBUG("Removing deleted object from lookup table (object_id=%u, object_block_index=%u)", object_id, object_block_index);
             set_free(&afs->lookup_table, i, LOOKUP_TABLE_BLOCK_STATE_GARBAGE);
+            storage_wipe_block_header(&afs->storage, i);
         }
     }
 }
