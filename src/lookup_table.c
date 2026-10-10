@@ -11,8 +11,6 @@
 #define LOOKUP_TABLE_BLOCK_STATE_UNKNOWN        0x0002
 #define LOOKUP_TABLE_BLOCK_STATE_GARBAGE        0x0003
 
-#define MIN_OBJECT_ID                           (LOOKUP_TABLE_BLOCK_STATE_GARBAGE + 1)
-
 #define LOOKUP_TABLE_GET_OBJECT_ID(X) ((uint16_t)((X) >> 16))
 #define LOOKUP_TABLE_GET_OBJECT_BLOCK_INDEX(X) ((uint16_t)(X))
 #define LOOKUP_TABLE_GET_BLOCK_STATE(X) MIN_VAL((uint16_t)(X), LOOKUP_TABLE_BLOCK_STATE_GARBAGE)
@@ -20,6 +18,8 @@
     ((((uint32_t)(OBJECT_ID) & 0xffff) << 16) | ((OBJECT_BLOCK_INDEX) & 0xffff))
 #define LOOKUP_TABLE_FREE_BLOCK_VALUE(STATE) \
     LOOKUP_TABLE_VALUE(INVALID_OBJECT_ID, STATE)
+#define LOOKUP_TABLE_GARBAGE_BLOCK_VALUE(OBJECT_ID) \
+    LOOKUP_TABLE_FREE_BLOCK_VALUE(MAX_VAL(OBJECT_ID, LOOKUP_TABLE_BLOCK_STATE_GARBAGE))
 
 static inline void set_value(lookup_table_t* lookup_table, uint16_t block, uint16_t object_id, uint16_t object_block_index) {
     lookup_table->values[block] = LOOKUP_TABLE_VALUE(object_id, object_block_index);
@@ -30,7 +30,7 @@ static inline void set_free(lookup_table_t* lookup_table, uint16_t block, uint16
 }
 
 static inline void set_garbage(lookup_table_t* lookup_table, uint16_t block, uint16_t object_id) {
-    set_free(lookup_table, block, MAX_VAL(object_id, LOOKUP_TABLE_BLOCK_STATE_GARBAGE));
+    lookup_table->values[block] = LOOKUP_TABLE_GARBAGE_BLOCK_VALUE(object_id);
 }
 
 static inline void set_is_v2(lookup_table_t* lookup_table, uint16_t block, bool value) {
@@ -200,13 +200,14 @@ uint16_t lookup_table_get_next_object_id(lookup_table_t* lookup_table) {
         // Very simple psuedo-random number generator which uniformly generates 16-bit values
         lookup_table->object_id_seed = lookup_table->object_id_seed * 1664525 + 1013904223;
         const uint16_t object_id = (uint16_t)lookup_table->object_id_seed;
-        if (object_id < MIN_OBJECT_ID) {
+        if (object_id == INVALID_OBJECT_ID) {
             continue;
         }
+        const uint32_t garbage_value = LOOKUP_TABLE_GARBAGE_BLOCK_VALUE(object_id);
         bool in_use = false;
         for (uint16_t j = 0; j < lookup_table->num_blocks; j++) {
             const uint32_t value = lookup_table->values[j];
-            if (object_id == LOOKUP_TABLE_GET_OBJECT_ID(value) || value == LOOKUP_TABLE_FREE_BLOCK_VALUE(object_id)) {
+            if (object_id == LOOKUP_TABLE_GET_OBJECT_ID(value) || value == garbage_value) {
                 in_use = true;
                 break;
             }

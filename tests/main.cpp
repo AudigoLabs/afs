@@ -869,6 +869,12 @@ TEST_F(AFSFixture, DeletedObjectIdNotReusedUntilErased) {
   ASSERT_TRUE(IsObjectIdAllocatable(object_id));
 }
 
+TEST_F(AFSFixture, LowObjectIdsAllocatable) {
+  for (uint16_t object_id = 1; object_id <= 3; object_id++) {
+    ASSERT_TRUE(IsObjectIdAllocatable(object_id));
+  }
+}
+
 TEST_F(AFSFixture, MissingBlockRead) {
   AFS_OBJECT_HANDLE_DEF(obj);
   static uint8_t buffer[16*1024];
