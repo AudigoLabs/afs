@@ -330,10 +330,20 @@ void afs_object_delete(afs_handle_t afs_handle, uint16_t object_id) {
     // Make sure the object isn't open
     AFS_ASSERT(!open_object_list_contains(afs, object_id));
 
-    // Remove the object from our lookup table
     AFS_LOG_DEBUG("Deleting object (%u)", object_id);
-    const uint16_t first_block = lookup_table_delete_object(&afs->lookup_table, object_id);
+    const uint16_t first_block = lookup_table_get_block(&afs->lookup_table, object_id, 0);
+    AFS_ASSERT_NOT_EQ(first_block, INVALID_BLOCK);
     storage_erase(&afs->storage, first_block);
+    const uint16_t num_blocks = lookup_table_get_num_blocks(&afs->lookup_table, object_id);
+    for (uint16_t i = 1; i < num_blocks; i++) {
+        const uint16_t block = lookup_table_get_block(&afs->lookup_table, object_id, i);
+        if (block != INVALID_BLOCK) {
+            storage_wipe_block_header(&afs->storage, block);
+        }
+    }
+
+    // Remove the object from our lookup table
+    lookup_table_delete_object(&afs->lookup_table, object_id);
 }
 
 void afs_wipe(afs_handle_t afs_handle, bool secure) {
@@ -348,6 +358,8 @@ void afs_wipe(afs_handle_t afs_handle, bool secure) {
         }
         if (should_erase) {
             storage_erase(&afs->storage, block);
+        } else {
+            storage_wipe_block_header(&afs->storage, block);
         }
     }
 }

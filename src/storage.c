@@ -209,3 +209,14 @@ void storage_erase(storage_t* storage, uint16_t block) {
     };
     cache_invalidate(&storage->cache, &position, storage->config->block_size);
 }
+
+void storage_wipe_block_header(storage_t* storage, uint16_t block) {
+    cache_t* cache = &storage->cache;
+    memset(cache->buffer, 0, cache->size);
+    storage->config->write(cache->buffer, block, 0, cache->size);
+    cache->position = (position_t) {
+        .block = block,
+        .offset = 0,
+    };
+    cache->length = cache->size;
+}
