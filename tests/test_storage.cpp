@@ -176,6 +176,10 @@ void test_storage_generate_v1_block(uint16_t block, uint16_t object_id, const vo
   storage_ptr += sizeof(end_chunk);
 }
 
+void test_storage_wipe_block_header(uint16_t block) {
+  memset(&m_storage[(uint64_t)block * BLOCK_SIZE], 0, READ_WRITE_SIZE);
+}
+
 void test_storage_raw_write(uint64_t offset, const void* data, uint32_t length) {
   memcpy(&m_storage[offset], data, length);
 }

@@ -3,6 +3,11 @@
 
 #include "afs/afs.h"
 
+extern "C" {
+#include "../src/impl_types.h"
+#include "../src/lookup_table.h"
+};
+
 #include "gtest/gtest.h"
 
 #include <stdlib.h>
@@ -37,6 +42,23 @@ class AFSFixture : public testing::Test {
     void TearDown() override {
       afs_deinit(afs_);
       test_storage_deinit();
+    }
+
+    void Remount() {
+      afs_deinit(afs_);
+      afs_init_t init_afs;
+      test_storage_get_afs_init(&init_afs);
+      afs_init(afs_, &init_afs);
+    }
+
+    bool IsObjectIdAllocatable(uint16_t object_id) {
+      lookup_table_t* lookup_table = &((afs_impl_t*)afs_def_.priv)->lookup_table;
+      for (uint32_t i = 0; i <= UINT16_MAX; i++) {
+        if (lookup_table_get_next_object_id(lookup_table) == object_id) {
+          return true;
+        }
+      }
+      return false;
     }
 
     afs_handle_def_t afs_def_;
@@ -816,6 +838,81 @@ TEST_F(AFSFixture, SecureWipe) {
   // Make sure that the storage is completely empty
   STORAGE_EXPECTATIONS_START();
   STORAGE_EXPECTATIONS_END();
+}
+
+TEST_F(AFSFixture, DeletedObjectIdNotReusedUntilErased) {
+  AFS_OBJECT_HANDLE_DEF(obj);
+  static uint8_t buffer[16*1024];
+  const afs_object_config_t config = {
+    .buffer = buffer,
+    .buffer_size = sizeof(buffer),
+  };
+  uint8_t write_data[1024*1024];
+  randomize_write_data(write_data, sizeof(write_data));
+
+  const uint16_t object_id = afs_object_create(afs_, obj, &config);
+  for (int i = 0; i < 12; i++) {
+    ASSERT_TRUE(afs_object_write(afs_, obj, 0, write_data, sizeof(write_data)));
+  }
+  ASSERT_TRUE(afs_object_close(afs_, obj));
+  ASSERT_GE(afs_object_get_num_blocks(afs_, object_id), 3);
+
+  afs_object_delete(afs_, object_id);
+  ASSERT_FALSE(IsObjectIdAllocatable(object_id));
+
+  Remount();
+  ASSERT_FALSE(IsObjectIdAllocatable(object_id));
+
+  afs_init_t init_afs;
+  test_storage_get_afs_init(&init_afs);
+  afs_prepare_storage(afs_, init_afs.storage_config.num_blocks);
+  ASSERT_TRUE(IsObjectIdAllocatable(object_id));
+}
+
+TEST_F(AFSFixture, MissingBlockRead) {
+  AFS_OBJECT_HANDLE_DEF(obj);
+  static uint8_t buffer[16*1024];
+  const afs_object_config_t config = {
+    .buffer = buffer,
+    .buffer_size = sizeof(buffer),
+  };
+  uint8_t write_data[1024*1024];
+  randomize_write_data(write_data, sizeof(write_data));
+  uint8_t manifest[50];
+  for (size_t i = 0; i < sizeof(manifest); i++) {
+    manifest[i] = (uint8_t)(i * 7 + 13);
+  }
+
+  const uint16_t object_id = afs_object_create(afs_, obj, &config);
+  uint64_t total_written = 0;
+  for (int i = 0; i < 20; i++) {
+    ASSERT_TRUE(afs_object_write(afs_, obj, 0, write_data, sizeof(write_data)));
+    total_written += sizeof(write_data);
+  }
+  ASSERT_TRUE(afs_object_write(afs_, obj, 5, manifest, sizeof(manifest)));
+  ASSERT_TRUE(afs_object_close(afs_, obj));
+  ASSERT_GE(afs_object_get_num_blocks(afs_, object_id), 5);
+
+  test_storage_wipe_block_header(2);
+  Remount();
+
+  ASSERT_TRUE(afs_object_open(afs_, obj, 5, object_id, &config));
+  uint8_t read_data[sizeof(manifest)];
+  ASSERT_EQ(afs_object_read(afs_, obj, read_data, sizeof(read_data), NULL), 0);
+  ASSERT_TRUE(afs_object_close(afs_, obj));
+
+  ASSERT_TRUE(afs_object_open(afs_, obj, 0, object_id, &config));
+  uint64_t total_read = 0;
+  while (true) {
+    const uint32_t read_length = afs_object_read(afs_, obj, write_data, sizeof(write_data), NULL);
+    if (read_length == 0) {
+      break;
+    }
+    total_read += read_length;
+  }
+  ASSERT_GT(total_read, 0u);
+  ASSERT_LT(total_read, total_written);
+  ASSERT_TRUE(afs_object_close(afs_, obj));
 }
 
 // A less structured test of most of the APIs

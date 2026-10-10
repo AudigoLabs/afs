@@ -11,9 +11,11 @@
 #define LOOKUP_TABLE_BLOCK_STATE_UNKNOWN        0x0002
 #define LOOKUP_TABLE_BLOCK_STATE_GARBAGE        0x0003
 
+#define MIN_OBJECT_ID                           (LOOKUP_TABLE_BLOCK_STATE_GARBAGE + 1)
+
 #define LOOKUP_TABLE_GET_OBJECT_ID(X) ((uint16_t)((X) >> 16))
 #define LOOKUP_TABLE_GET_OBJECT_BLOCK_INDEX(X) ((uint16_t)(X))
-#define LOOKUP_TABLE_GET_BLOCK_STATE(X) ((uint16_t)(X))
+#define LOOKUP_TABLE_GET_BLOCK_STATE(X) MIN_VAL((uint16_t)(X), LOOKUP_TABLE_BLOCK_STATE_GARBAGE)
 #define LOOKUP_TABLE_VALUE(OBJECT_ID, OBJECT_BLOCK_INDEX) \
     ((((uint32_t)(OBJECT_ID) & 0xffff) << 16) | ((OBJECT_BLOCK_INDEX) & 0xffff))
 #define LOOKUP_TABLE_FREE_BLOCK_VALUE(STATE) \
@@ -25,6 +27,10 @@ static inline void set_value(lookup_table_t* lookup_table, uint16_t block, uint1
 
 static inline void set_free(lookup_table_t* lookup_table, uint16_t block, uint16_t state) {
     set_value(lookup_table, block, INVALID_OBJECT_ID, state);
+}
+
+static inline void set_garbage(lookup_table_t* lookup_table, uint16_t block, uint16_t object_id) {
+    set_free(lookup_table, block, MAX_VAL(object_id, LOOKUP_TABLE_BLOCK_STATE_GARBAGE));
 }
 
 static inline void set_is_v2(lookup_table_t* lookup_table, uint16_t block, bool value) {
@@ -140,7 +146,7 @@ void lookup_table_populate(afs_impl_t* afs, afs_object_found_callback_t object_f
         }
         if (!is_object_deleted(&afs->lookup_table, object_id)) {
             AFS_LOG_DEBUG("Removing deleted object from lookup table (object_id=%u, object_block_index=%u)", object_id, object_block_index);
-            set_free(&afs->lookup_table, i, LOOKUP_TABLE_BLOCK_STATE_GARBAGE);
+            set_garbage(&afs->lookup_table, i, object_id);
         }
     }
 }
@@ -194,12 +200,13 @@ uint16_t lookup_table_get_next_object_id(lookup_table_t* lookup_table) {
         // Very simple psuedo-random number generator which uniformly generates 16-bit values
         lookup_table->object_id_seed = lookup_table->object_id_seed * 1664525 + 1013904223;
         const uint16_t object_id = (uint16_t)lookup_table->object_id_seed;
-        if (object_id == INVALID_OBJECT_ID) {
+        if (object_id < MIN_OBJECT_ID) {
             continue;
         }
         bool in_use = false;
         for (uint16_t j = 0; j < lookup_table->num_blocks; j++) {
-            if (object_id == LOOKUP_TABLE_GET_OBJECT_ID(lookup_table->values[j])) {
+            const uint32_t value = lookup_table->values[j];
+            if (object_id == LOOKUP_TABLE_GET_OBJECT_ID(value) || value == LOOKUP_TABLE_FREE_BLOCK_VALUE(object_id)) {
                 in_use = true;
                 break;
             }
@@ -237,7 +244,11 @@ uint16_t lookup_table_delete_object(lookup_table_t* lookup_table, uint16_t objec
             first_block = i;
         }
         AFS_LOG_DEBUG("Clearing lookup table for block (block=%u, object_block_index=%u)", object_id, object_block_index);
-        set_free(lookup_table, i, object_block_index == 0 ? LOOKUP_TABLE_BLOCK_STATE_ERASED : LOOKUP_TABLE_BLOCK_STATE_GARBAGE);
+        if (object_block_index == 0) {
+            set_free(lookup_table, i, LOOKUP_TABLE_BLOCK_STATE_ERASED);
+        } else {
+            set_garbage(lookup_table, i, object_id);
+        }
     }
     AFS_ASSERT_NOT_EQ(first_block, INVALID_BLOCK);
     return first_block;
@@ -304,8 +315,10 @@ uint16_t lookup_table_wipe_next_in_use(lookup_table_t* lookup_table, uint16_t st
         *should_erase = object_block_index == 0 || *should_erase;
         if (*should_erase) {
             AFS_LOG_DEBUG("Erasing block (block=%u, object_id=%u, object_block_index%u)", i, object_id, object_block_index);
+            set_free(lookup_table, i, LOOKUP_TABLE_BLOCK_STATE_ERASED);
+        } else {
+            set_garbage(lookup_table, i, object_id);
         }
-        set_free(lookup_table, i, *should_erase ? LOOKUP_TABLE_BLOCK_STATE_ERASED : LOOKUP_TABLE_BLOCK_STATE_GARBAGE);
         return i;
     }
     return INVALID_BLOCK;

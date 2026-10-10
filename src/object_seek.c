@@ -33,6 +33,10 @@ static inline uint16_t estimate_calculate_index(uint64_t density, uint64_t targe
 
 static bool get_offset_chunk_data(afs_impl_t* afs, uint16_t object_id, uint16_t block_index, offset_chunk_data_t* data) {
     const uint16_t block = lookup_table_get_block(&afs->lookup_table, object_id, block_index);
+    if (block == INVALID_BLOCK) {
+        AFS_LOG_ERROR("Missing block (object_id=%u, block_index=%u)", object_id, block_index);
+        return false;
+    }
     return storage_read_block_header_offset_data(&afs->storage, block, data);
 }
 
