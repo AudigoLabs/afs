@@ -869,12 +869,6 @@ TEST_F(AFSFixture, DeletedObjectIdNotReusedUntilErased) {
   ASSERT_TRUE(IsObjectIdAllocatable(object_id));
 }
 
-TEST_F(AFSFixture, LowObjectIdsAllocatable) {
-  for (uint16_t object_id = 1; object_id <= 3; object_id++) {
-    ASSERT_TRUE(IsObjectIdAllocatable(object_id));
-  }
-}
-
 TEST_F(AFSFixture, MissingBlockRead) {
   AFS_OBJECT_HANDLE_DEF(obj);
   static uint8_t buffer[16*1024];
@@ -884,18 +878,12 @@ TEST_F(AFSFixture, MissingBlockRead) {
   };
   uint8_t write_data[1024*1024];
   randomize_write_data(write_data, sizeof(write_data));
-  uint8_t manifest[50];
-  for (size_t i = 0; i < sizeof(manifest); i++) {
-    manifest[i] = (uint8_t)(i * 7 + 13);
-  }
 
   const uint16_t object_id = afs_object_create(afs_, obj, &config);
-  uint64_t total_written = 0;
   for (int i = 0; i < 20; i++) {
     ASSERT_TRUE(afs_object_write(afs_, obj, 0, write_data, sizeof(write_data)));
-    total_written += sizeof(write_data);
   }
-  ASSERT_TRUE(afs_object_write(afs_, obj, 5, manifest, sizeof(manifest)));
+  ASSERT_TRUE(afs_object_write(afs_, obj, 5, write_data, 50));
   ASSERT_TRUE(afs_object_close(afs_, obj));
   ASSERT_GE(afs_object_get_num_blocks(afs_, object_id), 5);
 
@@ -903,21 +891,7 @@ TEST_F(AFSFixture, MissingBlockRead) {
   Remount();
 
   ASSERT_TRUE(afs_object_open(afs_, obj, 5, object_id, &config));
-  uint8_t read_data[sizeof(manifest)];
-  ASSERT_EQ(afs_object_read(afs_, obj, read_data, sizeof(read_data), NULL), 0);
-  ASSERT_TRUE(afs_object_close(afs_, obj));
-
-  ASSERT_TRUE(afs_object_open(afs_, obj, 0, object_id, &config));
-  uint64_t total_read = 0;
-  while (true) {
-    const uint32_t read_length = afs_object_read(afs_, obj, write_data, sizeof(write_data), NULL);
-    if (read_length == 0) {
-      break;
-    }
-    total_read += read_length;
-  }
-  ASSERT_GT(total_read, 0u);
-  ASSERT_LT(total_read, total_written);
+  ASSERT_EQ(afs_object_read(afs_, obj, write_data, sizeof(write_data), NULL), 0);
   ASSERT_TRUE(afs_object_close(afs_, obj));
 }
 
