@@ -51,9 +51,7 @@ of every sub-block starts with a seek chunk (more info below).
 Each object is assigned a unique ID. The ID should be considered a random (non-zero) 16-bit value, but is guaranteed to
 be locally unique across every object currently stored within the file system. Note that these IDs may be reused over
 time as objects are deleted and others are created, and this does put a 2^16-1 limit on the number of objects which can
-be stored within the file system at any given time. Deleting an object only erases its first block, so its ID isn't
-reused until every other block whose header still references it has been erased. Otherwise, those stale blocks would
-be picked up as part of the new object the next time the lookup table is populated.
+be stored within the file system at any given time.
 
 ### Streams
 
