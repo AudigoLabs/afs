@@ -3,7 +3,7 @@ use core::fmt;
 /// Errors returned by AFS operations
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error<E> {
-    /// The underlying storage returned an error
+    /// The underlying storage returned an error, after which the state of the file system is unspecified
     Storage(E),
     /// The storage configuration is invalid
     InvalidConfig,

@@ -320,14 +320,13 @@ impl<'a, S: Storage, const MAX_OPEN: usize> Afs<'a, S, MAX_OPEN> {
             return Err(Error::ObjectOpen);
         }
         let mut block = 0;
-        while let Some((next, should_erase)) = self.lookup.next_in_use(block, secure) {
+        while let Some((next, should_erase)) = self.lookup.wipe_next_in_use(block, secure) {
             block = next;
             if should_erase {
                 cache::erase(&mut self.storage, &self.config, &mut self.cache, block).await?;
             } else {
                 cache::wipe_block_header(&mut self.storage, &mut self.cache, block).await?;
             }
-            self.lookup.set_wiped(block, should_erase);
         }
         Ok(())
     }
@@ -355,7 +354,6 @@ impl<'a, S: Storage, const MAX_OPEN: usize> Afs<'a, S, MAX_OPEN> {
             };
             block = next;
             cache::erase(&mut self.storage, &self.config, &mut self.cache, block).await?;
-            self.lookup.set_wiped(block, true);
         }
         Ok(())
     }

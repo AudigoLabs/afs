@@ -15,8 +15,6 @@ pub struct ObjectWriter<'b> {
     object_offset: [u64; NUM_STREAMS],
     block_offset: [u32; NUM_STREAMS],
     next_block_index: u16,
-    end_chunk_written: u8,
-    footer_pending: bool,
     cache: Cache<'b>,
 }
 
@@ -57,8 +55,6 @@ impl<'b> ObjectWriter<'b> {
             object_offset: [0; NUM_STREAMS],
             block_offset: [0; NUM_STREAMS],
             next_block_index: 0,
-            end_chunk_written: 0,
-            footer_pending: false,
             cache: Cache::new(buffer, INVALID_BLOCK),
         }
     }
@@ -90,17 +86,13 @@ impl<'b> ObjectWriter<'b> {
         afs: &mut Afs<'_, S, N>,
         pad: bool,
     ) -> Result<(), Error<S::Error>> {
-        if self.cache.pos.offset == 0 && self.cache.pos.block == INVALID_BLOCK {
+        if self.cache.pos.offset == 0 {
             let block_index = self.next_block_index.wrapping_sub(1);
-            let acquired = afs.lookup.acquire_block(self.id.get(), block_index).ok_or(Error::StorageFull)?;
-            if !acquired.is_erased() {
-                let result = cache::erase(&mut afs.storage, &afs.config, &mut afs.cache, acquired.block).await;
-                if result.is_err() {
-                    afs.lookup.release_block(&acquired);
-                    return result;
-                }
+            let (block, is_erased) = afs.lookup.acquire_block(self.id.get(), block_index).ok_or(Error::StorageFull)?;
+            self.cache.pos.block = block;
+            if !is_erased {
+                cache::erase(&mut afs.storage, &afs.config, &mut afs.cache, block).await?;
             }
-            self.cache.pos.block = acquired.block;
         }
         cache::write_cache(&mut afs.storage, &afs.config, &mut self.cache, pad).await
     }
@@ -119,19 +111,6 @@ impl<'b> ObjectWriter<'b> {
     }
 
     async fn write_footer<S: Storage, const N: usize>(
-        &mut self,
-        afs: &mut Afs<'_, S, N>,
-    ) -> Result<(), Error<S::Error>> {
-        if !self.footer_pending {
-            self.append_footer(afs).await?;
-            self.footer_pending = true;
-        }
-        self.flush(afs, true).await?;
-        self.footer_pending = false;
-        Ok(())
-    }
-
-    async fn append_footer<S: Storage, const N: usize>(
         &mut self,
         afs: &mut Afs<'_, S, N>,
     ) -> Result<(), Error<S::Error>> {
@@ -159,7 +138,8 @@ impl<'b> ObjectWriter<'b> {
             return Err(Error::Corrupt);
         }
         self.append(&FOOTER_MAGIC).map_err(|()| Error::Corrupt)?;
-        self.write_seek_chunk()
+        self.write_seek_chunk()?;
+        self.flush(afs, true).await
     }
 
     async fn write_data<S: Storage, const N: usize>(
@@ -269,26 +249,14 @@ impl<'b> ObjectWriter<'b> {
     }
 
     async fn finish<S: Storage, const N: usize>(&mut self, afs: &mut Afs<'_, S, N>) -> Result<(), Error<S::Error>> {
-        if self.end_chunk_written == 0 {
-            self.prepare_for_write(afs, CHUNK_HEADER_LENGTH).await?;
-        }
-        let end_chunk = tag(CHUNK_TYPE_END, 0).to_le_bytes();
-        while (self.end_chunk_written as usize) < end_chunk.len() || self.cache.is_full() {
-            let start = self.end_chunk_written as usize;
-            let length = (end_chunk.len() - start).min(self.cache.space() as usize);
-            self.append(&end_chunk[start..start + length]).map_err(|()| Error::Corrupt)?;
-            self.end_chunk_written += length as u8;
-            if self.cache.is_full() {
-                self.flush(afs, false).await?;
-            }
-        }
+        self.prepare_for_write(afs, CHUNK_HEADER_LENGTH).await?;
+        self.write_data(afs, &tag(CHUNK_TYPE_END, 0).to_le_bytes()).await?;
         self.write_footer(afs).await
     }
 
     /// Closes the object, returning its buffer
     ///
-    /// Fails if writing the end chunk failed due to insufficient space or a storage error, in which case the close can be
-    /// retried with the returned writer.
+    /// Fails if writing the end chunk failed due to insufficient space.
     #[allow(clippy::result_large_err)]
     pub async fn close<S: Storage, const N: usize>(
         mut self,
