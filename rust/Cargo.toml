@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["afs"]
+members = ["afs", "afs-difftest"]
 
 [profile.test]
 opt-level = 3

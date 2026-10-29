@@ -1,0 +1,12 @@
+[package]
+name = "afs-difftest"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+afs = { path = "../afs" }
+
+[build-dependencies]
+cc = "1"
