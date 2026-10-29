@@ -164,8 +164,15 @@ fn invalid_configuration_and_buffers_are_rejected() {
     assert!(matches!(small_lookup, Err(Error::InvalidBuffer)));
 
     let mut afs = mount(&storage).unwrap();
-    for size in [0, 64, 192, 384, 768] {
+    for size in [0, 64, 192, 384, 768, 3072, 8192] {
         assert!(matches!(afs.create(buffer(size)), Err(Error::InvalidBuffer)), "{size}");
+        assert!(matches!(block_on(afs.open_all(ObjectId::new(1).unwrap(), buffer(size))), Err(Error::InvalidBuffer)));
+    }
+    for size in [128, 256, 1024, 2048, 4096] {
+        let writer = afs.create(buffer(size)).unwrap();
+        let id = writer.id();
+        block_on(writer.close(&mut afs)).unwrap();
+        block_on(afs.delete(id)).unwrap();
     }
     let id = ObjectId::new(1).unwrap();
     assert_eq!(block_on(afs.open(id, Stream::S0, buffer(256))).err(), Some(Error::NotFound));
