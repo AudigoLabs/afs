@@ -114,7 +114,7 @@ impl<'b> ReadState<'b> {
             _ => false,
         };
         if length_invalid {
-            return Ok(Some(false));
+            return Err(Error::Corrupt);
         }
         match chunk_type {
             t if is_data_chunk(t) => {
@@ -136,7 +136,8 @@ impl<'b> ReadState<'b> {
                 self.storage_offset = align_up_u64(self.storage_offset, afs.config.block_size as u64);
                 Ok(Some(true))
             }
-            _ => Ok(Some(false)),
+            CHUNK_TYPE_END => Ok(Some(false)),
+            _ => Err(Error::Corrupt),
         }
     }
 

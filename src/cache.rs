@@ -1,7 +1,7 @@
 use crate::format::{
     BLOCK_FOOTER_LENGTH, BLOCK_HEADER_LENGTH, BlockHeader, CHUNK_TYPE_INVALID_ONE, CHUNK_TYPE_INVALID_ZERO,
-    CHUNK_TYPE_OFFSET, CHUNK_TYPE_SEEK, FOOTER_MAGIC, align_down, align_up, offset_value_offset, offset_value_stream,
-    seek_value_offset, seek_value_stream, tag_length, tag_type,
+    CHUNK_TYPE_OFFSET, CHUNK_TYPE_SEEK, FOOTER_MAGIC, OFFSET_CHUNK_MAX_LENGTH, align_down, align_up,
+    offset_value_offset, offset_value_stream, seek_value_offset, seek_value_stream, tag_length, tag_type,
 };
 use crate::{Config, Error, NUM_STREAMS, Storage};
 
@@ -201,20 +201,21 @@ async fn read_seek_chunk<S: Storage>(
     let chunk_type = tag_type(header);
     let length = tag_length(header);
     let num_entries = length / 4;
-    if chunk_type == CHUNK_TYPE_INVALID_ZERO
-        || chunk_type == CHUNK_TYPE_INVALID_ONE
-        || chunk_type != CHUNK_TYPE_SEEK
+    if chunk_type == CHUNK_TYPE_INVALID_ZERO || chunk_type == CHUNK_TYPE_INVALID_ONE {
+        return Ok(false);
+    }
+    if chunk_type != CHUNK_TYPE_SEEK
         || length > config.block_size - pos.offset
         || length % 4 != 0
         || num_entries as usize > NUM_STREAMS
     {
-        return Ok(false);
+        return Err(Error::Corrupt);
     }
     for _ in 0..num_entries {
         let value = read_u32(storage, config, cache, pos).await?;
         let stream = seek_value_stream(value);
         if data[stream] != 0 {
-            return Ok(false);
+            return Err(Error::Corrupt);
         }
         data[stream] = seek_value_offset(value);
     }
@@ -235,13 +236,16 @@ pub(crate) async fn read_offset_data<S: Storage>(
         return Err(Error::Corrupt);
     }
     let chunk_header = read_u32(storage, config, cache, &mut pos).await?;
-    if tag_type(chunk_header) != CHUNK_TYPE_OFFSET {
-        return Ok(false);
+    match tag_type(chunk_header) {
+        CHUNK_TYPE_OFFSET => {}
+        CHUNK_TYPE_INVALID_ZERO | CHUNK_TYPE_INVALID_ONE => return Ok(false),
+        _ => return Err(Error::Corrupt),
     }
-    let num_streams = (tag_length(chunk_header) / 8) as u8;
-    if num_streams as usize > NUM_STREAMS {
-        return Ok(false);
+    let length = tag_length(chunk_header);
+    if length % 8 != 0 || length > OFFSET_CHUNK_MAX_LENGTH {
+        return Err(Error::Corrupt);
     }
+    let num_streams = length / 8;
     for _ in 0..num_streams {
         let mut raw = [0u8; 8];
         read_data(storage, config, cache, &mut pos, &mut raw).await?;
