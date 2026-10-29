@@ -88,6 +88,52 @@ int main(void) {
 
 You can run the test suite by running `make` within the `tests/` directory.
 
+## Rust
+
+The [rust/afs](rust/afs) crate is an async, `no_std`, allocation-free implementation of AFS which reads and writes
+exactly the same on-disk format as the C library. The storage is accessed through the async `afs::Storage` trait, the
+`Afs` instance owns the storage, and all buffers are provided by the caller.
+
+```rust
+use afs::{Afs, Config, Error, Storage, Stream, lookup_table_len};
+
+const CONFIG: Config = Config {
+    block_size: 4 * 1024 * 1024,
+    num_blocks: 8192,
+    sub_blocks_per_block: 256,
+    min_read_write_size: 512,
+};
+
+async fn example<S: Storage>(storage: S, lookup_table: &mut [u32; lookup_table_len(8192)]) -> Result<(), Error<S::Error>> {
+    let mut read_write_buffer = [0u8; 512];
+    let mut object_buffer = [0u8; 1024];
+    let mut afs: Afs<'_, S> = Afs::mount(storage, CONFIG, &mut read_write_buffer, lookup_table).await?;
+
+    let mut writer = afs.create(&mut object_buffer)?;
+    let object_id = writer.id();
+    writer.write(&mut afs, Stream::S0, b"Hello World").await?;
+    let object_buffer = writer.close(&mut afs).await.map_err(|e| e.error)?;
+
+    let mut reader = afs.open(object_id, Stream::S0, object_buffer).await?;
+    let mut buffer = [0u8; 120];
+    let len = reader.read(&mut afs, &mut buffer).await?;
+    reader.close(&mut afs);
+    Ok(())
+}
+```
+
+Differences from the C library:
+* Errors (including unexpected storage contents) are returned as `afs::Error` rather than asserting.
+* Offsets are computed in 64 bits, so seeking within and getting the size of objects larger than 4GB works (the C
+  implementation wraps at 4GB).
+* At most `MAX_OPEN` objects (a const generic parameter of `Afs` which defaults to 8) can be open at once.
+* The lookup table buffer is a `u32` slice whose length is given by `lookup_table_len()`.
+
+Run `cargo test` within the `rust/` directory to run the Rust tests. These include differential tests (in
+[rust/afs-difftest](rust/afs-difftest)) which compile the C library and check that both implementations perform the
+same storage operations and return the same results for random sequences of operations, that each can read what the
+other writes, and that they recover the same data after a simulated power loss.
+
 ## License
 
 AFS is provided under the MIT license. See [LICENSE.md](LICENSE.md) for more information.
