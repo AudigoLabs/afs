@@ -1,0 +1,8 @@
+[workspace]
+resolver = "3"
+members = ["afs"]
+
+[profile.test]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true

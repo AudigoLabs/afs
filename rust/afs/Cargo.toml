@@ -1,0 +1,11 @@
+[package]
+name = "afs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Async no_std implementation of the Audigo File System (AFS)"
+repository = "https://github.com/AudigoLabs/afs"
+categories = ["embedded", "filesystem", "no-std"]
+
+[dependencies]
