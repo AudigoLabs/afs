@@ -1,6 +1,6 @@
 //! An async, `no_std`, allocation-free implementation of the Audigo File System (AFS).
 //!
-//! The on-disk format is identical to the C implementation's (see `DESIGN.md`).
+//! The on-disk format is described in `DESIGN.md`.
 
 #![cfg_attr(not(test), no_std)]
 
