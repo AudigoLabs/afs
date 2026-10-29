@@ -159,8 +159,8 @@ impl<'a> LookupTable<'a> {
         self.values().iter().filter(|&&v| value_object_id(v) != 0).count() as u16
     }
 
-    pub(crate) fn is_full(&self) -> bool {
-        self.values().iter().all(|&v| value_object_id(v) != 0)
+    pub(crate) fn free_blocks(&self) -> u16 {
+        self.values().iter().filter(|&&v| value_object_id(v) == 0).count() as u16
     }
 
     pub(crate) fn acquire_block(&mut self, object_id: u16, object_block_index: u16) -> Option<Acquired> {

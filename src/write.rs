@@ -15,6 +15,7 @@ pub struct ObjectWriter<'b> {
     object_offset: [u64; NUM_STREAMS],
     block_offset: [u32; NUM_STREAMS],
     next_block_index: u16,
+    reserved: bool,
     end_chunk_written: u8,
     footer_pending: bool,
     cache: Cache<'b>,
@@ -57,6 +58,7 @@ impl<'b> ObjectWriter<'b> {
             object_offset: [0; NUM_STREAMS],
             block_offset: [0; NUM_STREAMS],
             next_block_index: 0,
+            reserved: false,
             end_chunk_written: 0,
             footer_pending: false,
             cache: Cache::new(buffer, INVALID_BLOCK),
@@ -101,8 +103,23 @@ impl<'b> ObjectWriter<'b> {
                 }
             }
             self.cache.pos.block = acquired.block;
+            if self.reserved {
+                afs.reserved_blocks -= 1;
+                self.reserved = false;
+            }
         }
         cache::write_cache(&mut afs.storage, &afs.config, &mut self.cache, pad).await
+    }
+
+    fn reserve_block<S: Storage, const N: usize>(&mut self, afs: &mut Afs<'_, S, N>) -> Result<(), Error<S::Error>> {
+        if !self.reserved {
+            if afs.lookup.free_blocks() <= afs.reserved_blocks {
+                return Err(Error::StorageFull);
+            }
+            afs.reserved_blocks += 1;
+            self.reserved = true;
+        }
+        Ok(())
     }
 
     fn write_seek_chunk<E>(&mut self) -> Result<(), Error<E>> {
@@ -190,11 +207,11 @@ impl<'b> ObjectWriter<'b> {
             return Ok(());
         }
         let num_offsets = self.object_offset.iter().filter(|&&offset| offset != 0).count() as u32;
-        self.append(&tag(CHUNK_TYPE_OFFSET, num_offsets * 8).to_le_bytes()).map_err(|()| Error::InvalidBuffer)?;
+        self.write_data(afs, &tag(CHUNK_TYPE_OFFSET, num_offsets * 8).to_le_bytes()).await?;
         for stream in 0..NUM_STREAMS {
             let offset = self.object_offset[stream];
             if offset != 0 {
-                self.append(&offset_value(stream, offset).to_le_bytes()).map_err(|()| Error::InvalidBuffer)?;
+                self.write_data(afs, &offset_value(stream, offset).to_le_bytes()).await?;
             }
         }
         Ok(())
@@ -214,6 +231,7 @@ impl<'b> ObjectWriter<'b> {
             self.cache.pos = Position::new(INVALID_BLOCK, 0);
         }
         if self.write_position() == 0 {
+            self.reserve_block(afs)?;
             self.write_block_header(afs).await?;
         }
         let sub_block_space = self.remaining_sub_block_space(sub_block_size);
@@ -254,7 +272,8 @@ impl<'b> ObjectWriter<'b> {
 
     /// Writes data to a stream of the object
     ///
-    /// Returns [`Error::StorageFull`] if the storage is full (see [`Afs::is_full`]).
+    /// Returns [`Error::StorageFull`] if the storage is full (see [`Afs::is_full`]), in which case only the data which
+    /// fit was written.
     pub async fn write<S: Storage, const N: usize>(
         &mut self,
         afs: &mut Afs<'_, S, N>,
@@ -301,5 +320,17 @@ impl<'b> ObjectWriter<'b> {
             }
             Err(error) => Err(CloseError { error, writer: self }),
         }
+    }
+
+    /// Abandons the object without closing it, returning its buffer
+    ///
+    /// Data which hasn't been written to the storage is discarded, and the data which has been written is kept as an
+    /// object without an end, as if power was lost.
+    pub fn abandon<S: Storage, const N: usize>(self, afs: &mut Afs<'_, S, N>) -> &'b mut [u8] {
+        if self.reserved {
+            afs.reserved_blocks -= 1;
+        }
+        afs.open.remove(self.id.get(), OpenKind::Writing);
+        self.cache.into_buffer()
     }
 }

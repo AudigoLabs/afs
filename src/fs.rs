@@ -86,6 +86,7 @@ pub struct Afs<'a, S, const MAX_OPEN: usize = 8> {
     pub(crate) lookup: LookupTable<'a>,
     pub(crate) cache: Cache<'a>,
     pub(crate) open: OpenList<MAX_OPEN>,
+    pub(crate) reserved_blocks: u16,
 }
 
 fn object_data_from_cache(cache: &mut Cache<'_>) -> (Option<Stream>, usize) {
@@ -153,7 +154,14 @@ impl<'a, S: Storage, const MAX_OPEN: usize> Afs<'a, S, MAX_OPEN> {
         let read_write_buffer =
             read_write_buffer.get_mut(..config.min_read_write_size as usize).ok_or(Error::InvalidBuffer)?;
         let lookup = LookupTable::new(lookup_table, config.num_blocks).ok_or(Error::InvalidBuffer)?;
-        let mut afs = Self { storage, config, lookup, cache: Cache::new(read_write_buffer, 0), open: OpenList::new() };
+        let mut afs = Self {
+            storage,
+            config,
+            lookup,
+            cache: Cache::new(read_write_buffer, 0),
+            open: OpenList::new(),
+            reserved_blocks: 0,
+        };
         afs.populate(on_object_found).await?;
         Ok(afs)
     }
@@ -339,7 +347,7 @@ impl<'a, S: Storage, const MAX_OPEN: usize> Afs<'a, S, MAX_OPEN> {
 
     /// Returns whether or not the store is full (which causes writes to fail)
     pub fn is_full(&self) -> bool {
-        self.lookup.is_full()
+        self.lookup.free_blocks() <= self.reserved_blocks
     }
 
     /// Prepares the backing storage for writing to the specified number of blocks

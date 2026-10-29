@@ -212,4 +212,10 @@ fn failed_close_keeps_the_writer_open() {
     let listed: Vec<ObjectId> = std::iter::from_fn(|| afs.list_next(&mut cursor)).collect();
     assert!(listed.contains(&id));
     assert!(afs.has_open_objects());
+    let filler_id = filler.id();
+    error.writer.abandon(&mut afs);
+    filler.abandon(&mut afs);
+    assert!(!afs.has_open_objects());
+    let mut reader = block_on(afs.open(filler_id, Stream::S0, buffer(256))).unwrap();
+    assert_eq!(block_on(reader.read(&mut afs, &mut [0; 4096])).unwrap(), 4096);
 }
