@@ -191,11 +191,12 @@ impl<'b> ReadState<'b> {
         }
         let mut read_bytes = 0;
         if self.data_chunk_length > 0 {
-            read_bytes = self.process_read_data(max_length);
-            if let (Some(data), 1..) = (data, read_bytes) {
-                let out = data.get_mut(..read_bytes as usize).ok_or(Error::Corrupt)?;
+            let length = self.data_chunk_length.min(max_length);
+            if let (Some(data), 1..) = (data, length) {
+                let out = data.get_mut(..length as usize).ok_or(Error::Corrupt)?;
                 cache::read_data(&mut afs.storage, &afs.config, &mut self.cache, &mut pos, out).await?;
             }
+            read_bytes = self.process_read_data(max_length);
         } else if let Some(has_more) = self.process_new_chunk(afs, &mut pos, block_end).await? {
             return Ok(if has_more { Step::Continue(0) } else { Step::Done });
         }
@@ -215,7 +216,12 @@ impl<'b> ReadState<'b> {
         let mut total = 0usize;
         let mut remaining = u32::try_from(buf.len()).unwrap_or(u32::MAX);
         while remaining > 0 {
-            let Step::Continue(read_bytes) = self.process(afs, Some(&mut buf[total..]), remaining).await? else {
+            let step = match self.process(afs, Some(&mut buf[total..]), remaining).await {
+                Ok(step) => step,
+                Err(_) if total > 0 => break,
+                Err(e) => return Err(e),
+            };
+            let Step::Continue(read_bytes) = step else {
                 break;
             };
             total += read_bytes as usize;
@@ -293,6 +299,8 @@ impl<'b> StreamReader<'b> {
     }
 
     /// Reads data from the stream and returns the number of bytes read (0 at the end of the stream)
+    ///
+    /// If a storage error occurs after some data was read, the data read so far is returned.
     pub async fn read<S: Storage, const N: usize>(
         &mut self,
         afs: &mut Afs<'_, S, N>,

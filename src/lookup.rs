@@ -20,6 +20,18 @@ pub const fn lookup_table_len(num_blocks: u16) -> usize {
     num_blocks as usize + (num_blocks as usize).div_ceil(32)
 }
 
+pub(crate) struct Acquired {
+    pub block: u16,
+    state: u16,
+    was_v2: bool,
+}
+
+impl Acquired {
+    pub(crate) fn is_erased(&self) -> bool {
+        self.state == STATE_ERASED
+    }
+}
+
 pub(crate) struct LookupTable<'a> {
     buffer: &'a mut [u32],
     num_blocks: usize,
@@ -151,7 +163,7 @@ impl<'a> LookupTable<'a> {
         self.values().iter().all(|&v| value_object_id(v) != 0)
     }
 
-    pub(crate) fn acquire_block(&mut self, object_id: u16, object_block_index: u16) -> Option<(u16, bool)> {
+    pub(crate) fn acquire_block(&mut self, object_id: u16, object_block_index: u16) -> Option<Acquired> {
         let mut best: Option<(u16, u16)> = None;
         for (block, v) in self.blocks() {
             if value_object_id(v) != 0 {
@@ -166,28 +178,35 @@ impl<'a> LookupTable<'a> {
             }
         }
         let (block, state) = best?;
+        let was_v2 = self.is_v2(block);
         self.set_value(block, object_id, object_block_index);
         self.set_is_v2(block, true);
-        Some((block, state == STATE_ERASED))
+        Some(Acquired { block, state, was_v2 })
     }
 
-    pub(crate) fn wipe_next_in_use(&mut self, start_block: u16, secure: bool) -> Option<(u16, bool)> {
+    pub(crate) fn release_block(&mut self, acquired: &Acquired) {
+        self.set_free(acquired.block, acquired.state);
+        self.set_is_v2(acquired.block, acquired.was_v2);
+    }
+
+    pub(crate) fn next_in_use(&self, start_block: u16, secure: bool) -> Option<(u16, bool)> {
         let (block, v) = self.blocks().skip(start_block as usize).find(|&(_, v)| value_object_id(v) != 0)?;
-        let should_erase = secure || value_object_block_index(v) == 0;
-        self.set_free(block, if should_erase { STATE_ERASED } else { STATE_GARBAGE });
-        Some((block, should_erase))
+        Some((block, secure || value_object_block_index(v) == 0))
+    }
+
+    pub(crate) fn set_wiped(&mut self, block: u16, erased: bool) {
+        self.set_free(block, if erased { STATE_ERASED } else { STATE_GARBAGE });
     }
 
     pub(crate) fn num_erased(&self) -> u16 {
         self.values().iter().filter(|&&v| v == value(0, STATE_ERASED)).count() as u16
     }
 
-    pub(crate) fn next_pending_erase(&mut self, start_block: u16) -> Option<u16> {
+    pub(crate) fn next_pending_erase(&self, start_block: u16) -> Option<u16> {
         let (block, _) = self
             .blocks()
             .skip(start_block as usize)
             .find(|&(_, v)| value_object_id(v) == 0 && value_object_block_index(v) != STATE_ERASED)?;
-        self.set_free(block, STATE_ERASED);
         Some(block)
     }
 

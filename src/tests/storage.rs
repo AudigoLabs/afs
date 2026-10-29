@@ -49,6 +49,7 @@ pub struct Inner {
     pub read_calls: u64,
     pub read_bytes: u64,
     pub fail_after: Option<u64>,
+    pub fail_once: Option<u64>,
     pub ops: u64,
 }
 
@@ -108,6 +109,15 @@ impl MemStorage {
         None
     }
 
+    pub fn fail_once_after(&self, ops: u64) {
+        let mut inner = self.0.borrow_mut();
+        inner.fail_once = Some(inner.ops + ops + 1);
+    }
+
+    pub fn clear_fault(&self) -> bool {
+        self.0.borrow_mut().fail_once.take().is_some()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.borrow().sectors.is_empty()
     }
@@ -135,6 +145,10 @@ impl MemStorage {
         assert_eq!(length as u32 % config.min_read_write_size, 0);
         let mut inner = self.0.borrow_mut();
         inner.ops += 1;
+        if inner.fail_once == Some(inner.ops) {
+            inner.fail_once = None;
+            return Err(Fault);
+        }
         match inner.fail_after {
             Some(limit) if inner.ops > limit => Err(Fault),
             _ => Ok(()),
