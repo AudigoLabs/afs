@@ -38,6 +38,7 @@ impl Config {
         size >= BLOCK_FOOTER_LENGTH
             && size >= self.min_read_write_size
             && size % self.min_read_write_size == 0
+            && self.block_size % size == 0
             && if size > sub_block_size { size % sub_block_size == 0 } else { sub_block_size % size == 0 }
     }
 }

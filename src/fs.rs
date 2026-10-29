@@ -228,7 +228,8 @@ impl<'a, S: Storage, const MAX_OPEN: usize> Afs<'a, S, MAX_OPEN> {
 
     /// Creates a new object for writing
     ///
-    /// `buffer` must be a multiple of `min_read_write_size` and either a multiple or a divisor of the sub-block size.
+    /// `buffer` must be a multiple of `min_read_write_size`, either a multiple or a divisor of the sub-block size, and a
+    /// divisor of the block size.
     pub fn create<'b>(&mut self, buffer: &'b mut [u8]) -> Result<ObjectWriter<'b>, Error<S::Error>> {
         self.check_object_buffer(buffer)?;
         let object_id = self.lookup.next_object_id();
